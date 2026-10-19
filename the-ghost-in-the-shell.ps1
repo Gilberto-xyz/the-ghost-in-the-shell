@@ -2,12 +2,14 @@
 # Ejecuta: .\the-ghost-in-the-shell.ps1 -Action Install
 # Para quitarlo: .\the-ghost-in-the-shell.ps1 -Action Uninstall
 param(
-    [ValidateSet('Install', 'Start', 'Stop', 'Status', 'Uninstall', 'Run', 'Test')]
+    [ValidateSet('Install', 'Start', 'Stop', 'Status', 'Uninstall', 'Launch', 'Run', 'Test')]
     [string]$Action = 'Status'
 )
 
 $ErrorActionPreference = 'Stop'
 $taskName = 'the ghost in the shell'
+$stateFolder = Join-Path $env:LOCALAPPDATA 'the-ghost-in-the-shell'
+$pidPath = Join-Path $stateFolder 'worker.pid.json'
 
 # Cambia estos dos valores si quieres otros tiempos.
 $idleSeconds = 285       # 4 minutos y 45 segundos sin usar teclado ni mouse
@@ -17,12 +19,37 @@ function Get-GhostTask {
     Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 }
 
+function Get-GhostWorker {
+    if (-not (Test-Path -LiteralPath $pidPath)) { return $null }
+    try {
+        $record = Get-Content -LiteralPath $pidPath -Raw | ConvertFrom-Json
+        $process = Get-Process -Id ([int]$record.pid) -ErrorAction Stop
+        if ($process.StartTime.ToUniversalTime().Ticks -eq [long]$record.startedTicks) {
+            return $process
+        }
+    } catch { }
+    return $null
+}
+
+function Stop-GhostWorker {
+    $worker = Get-GhostWorker
+    if (-not $worker) { return }
+    Stop-Process -Id $worker.Id -Force
+    $worker.WaitForExit(5000) | Out-Null
+    if (Get-GhostWorker) { throw 'The background process did not stop.' }
+    Remove-Item -LiteralPath $pidPath -ErrorAction SilentlyContinue
+}
+
 switch ($Action) {
     'Install' {
         $powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
         $folder = Split-Path -Parent $PSCommandPath
-        $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Action Run'
+        $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Action Launch'
+
+        if (Get-GhostTask) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
+        New-Item -ItemType Directory -Path $stateFolder -Force | Out-Null
+        Stop-GhostWorker
 
         $task = New-ScheduledTask `
             -Action (New-ScheduledTaskAction -Execute $powerShell -Argument $arguments -WorkingDirectory $folder) `
@@ -33,23 +60,44 @@ switch ($Action) {
 
         Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
         Start-ScheduledTask -TaskName $taskName
+        Start-Sleep -Seconds 2
+        if (-not (Get-GhostWorker)) { throw 'The background process did not start.' }
         "Installed and started: $taskName"
         return
     }
     'Start' {
         if (-not (Get-GhostTask)) { throw 'Run -Action Install first.' }
+        if (Get-GhostWorker) { 'Already running.'; return }
         Start-ScheduledTask -TaskName $taskName
-        'Started.'
+        Start-Sleep -Seconds 2
+        if (-not (Get-GhostWorker)) { throw 'The background process did not start.' }
+        'Started in the background.'
         return
     }
     'Stop' {
         if (Get-GhostTask) { Stop-ScheduledTask -TaskName $taskName }
+        Stop-GhostWorker
         'Stopped. It will start again at your next sign-in.'
         return
     }
     'Status' {
         $task = Get-GhostTask
-        if ($task) { "Task: $($task.State)" } else { 'Not installed.' }
+        $worker = Get-GhostWorker
+        if (-not $task) { 'Not installed.' }
+        elseif ($worker) { "Running in the background (PID $($worker.Id))." }
+        else { 'Installed, but not running.' }
+        return
+    }
+    'Launch' {
+        if (Get-GhostWorker) { return }
+        New-Item -ItemType Directory -Path $stateFolder -Force | Out-Null
+        $powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Action Run'
+        $worker = Start-Process -FilePath $powerShell -ArgumentList $arguments -WindowStyle Hidden -PassThru
+        @{ pid = $worker.Id; startedTicks = $worker.StartTime.ToUniversalTime().Ticks } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $pidPath
+        Start-Sleep -Milliseconds 700
+        if (-not (Get-GhostWorker)) { throw 'The background process did not start.' }
         return
     }
     'Uninstall' {
@@ -57,6 +105,9 @@ switch ($Action) {
             Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
         }
+        Stop-GhostWorker
+        Remove-Item -LiteralPath $pidPath -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stateFolder -ErrorAction SilentlyContinue
         'Stopped and removed from startup.'
         return
     }

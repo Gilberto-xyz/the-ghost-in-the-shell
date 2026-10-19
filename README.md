@@ -16,7 +16,7 @@ Teams can still change your presence because of calls, meetings, a locked comput
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\the-ghost-in-the-shell.ps1 -Action Install
 ```
 
-This starts the script now and creates a scheduled task named **the ghost in the shell**. It starts again whenever you sign in to Windows. It cannot keep Teams Available before sign-in or while Windows is locked.
+This starts a hidden background process and creates a scheduled task named **the ghost in the shell**. The task launches the process and then finishes, so no terminal window or taskbar icon needs to stay open. The process starts again whenever you sign in to Windows. It cannot keep Teams Available before sign-in or while Windows is locked.
 
 ## Keep Windows awake, including on battery
 
@@ -34,7 +34,7 @@ Use the install command above and replace `Install` with:
 
 | Action | What it does |
 | --- | --- |
-| `Status` | Shows whether the scheduled task is running. |
+| `Status` | Shows whether the hidden background process is running. |
 | `Stop` | Stops it until your next Windows sign-in. |
 | `Start` | Starts it again. |
 | `Uninstall` | Stops it and removes the scheduled task. |
