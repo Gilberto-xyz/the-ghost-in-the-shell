@@ -47,4 +47,3 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\the-ghost-in-the-shell
 ```
 
 To change the timing, edit `$idleSeconds` and `$repeatSeconds` near the top of the script. Requires Windows 10 or 11 and Windows PowerShell 5.1.
-
